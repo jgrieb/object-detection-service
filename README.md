@@ -35,7 +35,7 @@ Or by uploading the image directly:
 #### Return type
 By default JSON is returned, but you can change this so that the service returns the image with the detected bounding boxes drawn on top (in this case you should specify the output file with the `-o` flag)
 
-`curl -XPOST localhost:8000/classify_url -H "Content-Type: application/json" -d '{"url":"http://oxalis.br.fgov.be/images/BR0/000/013/701/604/BR0000013701604.jpg", "returnType"}' -o output.jpg`
+`curl -XPOST localhost:8000/classify_url -H "Content-Type: application/json" -d '{"url":"http://oxalis.br.fgov.be/images/BR0/000/013/701/604/BR0000013701604.jpg", "returnType":"image"}' -o output.jpg`
 
 `curl -XPOST localhost:8000/classify_image -F 'payload=@images/BR0000013701604.jpg' -F 'returnType=image' -o output.jpg`
 
