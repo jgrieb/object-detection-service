@@ -1,4 +1,8 @@
-data/model_final.pth
+data/*
+!data/.gitkeep
+config/*
+!config/cordraConfig.json.template
+!config/custom_model_config.yaml
 
 # venv
 bin/

@@ -1,43 +1,56 @@
-# plant-detection-service
+# object-detection-service
 
-This is a demonstration of how to provide a trained machine learning model for plant organ detection as a micro service. This project is based on the work of @2younis and his repo [2younis/plant-organ-detection](https://github.com/2younis/plant-organ-detection). His work is described in the following publication:
+This project demonstrates how to provide object detection as a microservice based on a trained deep learning model using the [detectron2 framework](https://github.com/facebookresearch/detectron2). Furthermore the microservice
+
+An example implementation is made for the use case of plant organ detection, using the trained model for this purpose from @2younis and his repo [2younis/plant-organ-detection](https://github.com/2younis/plant-organ-detection). His work is described in the following publication:
 
 > Younis et al. (2020): Detection and Annotation of Plant Organs from Digitized Herbarium Scans using Deep Learning
 > https://arxiv.org/abs/2007.13106
 
-The purpose of this repo is to create a micro service where a herbarium sheet image can be sent to via http, which then applies the trained model on the image and returns the detected plant organ instances in JSON format. Also an example is given of this service could interact with a [Cordra](https://www.cordra.org/index.html) instance.
+The idea is that an image can be sent to the microservice via http, which then applies the trained model on the image and returns the detected plant organ instances in JSON format. Also an example is given of this service could interact with a [Cordra](https://www.cordra.org/index.html) instance.
 
 
 ## Setup
 Requirement: Python3 with the venv module installed
 ```bash
 # copy this repository
-git clone https://github.com/jgrieb/plant-detection-service
+git clone https://github.com/jgrieb/object-detection-service
 # create a virtual environment
-python3 -m venv plant-detection-service
-cd plant-detection-service && source bin/activate
+python3 -m venv object-detection-service
+cd object-detection-service && source bin/activate
 # install dependencies
 pip install -r requirements.txt
-# download the trained ML model
+# if you run into an error during installation of the pycocotools
+# try running the following (depending on the Python version on the machine):
+# sudo apt-get install python3.8-dev python3-opencv
+# Then try again: pip install -r requirements.txt
+```
+
+Afterwards download a trained .pth model for the object detection and save it in the `data` folder as `model_final.pth`. For this example we use the model from @2younis mentioned above for plant organ detection.
+```
 wget https://github.com/2younis/plant-organ-detection/releases/download/v1.0/model_final.pth -P data/
 ```
 
+Finally customize the `config/custom_model_config.yaml` according to the trained model and set the `CLASS_LIST` parameter and the configuration loading in `main.py` accordingly. This is already preconfigured for the plant organ detection example.
+
+For interaction with Cordra you will also need to `cp config/cordraConfig.json.template config/cordraConfig.json` and configure, see below **Interaction with Cordra** for further information.
 
 ## Run
 Run the service with `bin/uvicorn main:app` (you might want to add `--host 0.0.0.0 --port 8000` or another configuration)
 
 You can then either access it by passing a url to an image:
-`curl -XPOST localhost:8000/classify_url -H "Content-Type: application/json" -d '{"url":"http://oxalis.br.fgov.be/images/BR0/000/013/701/604/BR0000013701604.jpg"}'`
+`curl -XPOST localhost:8000/object-detection -H "Content-Type: application/json" -d '{"url":"http://oxalis.br.fgov.be/images/BR0/000/013/701/604/BR0000013701604.jpg"}'`
 
 Or by uploading the image directly:
-`curl -XPOST localhost:8000/classify_image -F 'payload=@images/BR0000013701604.jpg'`
+`curl -XPOST localhost:8000/object-detection/image-upload -F 'payload=@images/BR0000013701604.jpg'`
+curl -XPOST localhost:8000/object-detection/image-upload -F 'payload=@CamTrapImport_2017-04-12_AdditionalStations_Orquidia_031_03.JPG'
 
 #### Return type
 By default JSON is returned, but you can change this so that the service returns the image with the detected bounding boxes drawn on top (in this case you should specify the output file with the `-o` flag)
 
-`curl -XPOST localhost:8000/classify_url -H "Content-Type: application/json" -d '{"url":"http://oxalis.br.fgov.be/images/BR0/000/013/701/604/BR0000013701604.jpg", "returnType":"image"}' -o output.jpg`
+`curl -XPOST localhost:8000/object-detection -H "Content-Type: application/json" -d '{"url":"http://oxalis.br.fgov.be/images/BR0/000/013/701/604/BR0000013701604.jpg", "returnType":"image"}' -o output.jpg`
 
-`curl -XPOST localhost:8000/classify_image -F 'payload=@images/BR0000013701604.jpg' -F 'returnType=image' -o output.jpg`
+`curl -XPOST localhost:8000/object-detection/image-upload -F 'payload=@images/BR0000013701604.jpg' -F 'returnType=image' -o output.jpg`
 
 Returned JSON data has the following format:
 ```json
@@ -54,94 +67,81 @@ Returned JSON data has the following format:
 ```
 where the boundingBox are pixel coordinates of [xmin, ymin, xmax, ymax].
 
+## Documentation
+Thanks to the fastapi framework an OpenApi-conformant documentation of the REST Api is autogenerated when running the service and can be accessed under `localhost:8000/docs`. See here for further explanation of the parameters.
+
 ## Interaction with Cordra
-The microservice can be accessed by Cordra via HTTP requests. The idea is that a Digital Specimen in Cordra has an image attached as a payload and provides a [type method](https://www.cordra.org/documentation/design/type-methods.html) `createAnnotations`. When this type method is invoked on the object by an external client, Cordra sends a HTTP request to the plant detection service together with the image URL. The returned output from the microservice is processed by Cordra, serialized into RDF-jsonld and stored directly in the Digital Specimen object. The JavaScript for such a method would look like this:
+This microservice is desigend for interaction with Digital Objects managed in [Cordra](https://www.cordra.org/index.html). The lifecycle hooks of the Digital Object can be used to automatically trigger the object detection when a new image is uploaded as a payload to a Digital Object. Currently the setup is in that way that this microservice uploads new Digital Objects of type *AnnotationList* when objects are detected and links them to the object of origin. For this a service account with Cordra access is required: `cp config/cordraConfig.json.template config/cordraConfig.json` to copy the template and then put in the credentials there. An example lifecycle configuration for the Digital Object type is given in the following
 
 ```javascript
 // Nashorn JDK cannot use XmlHttpRequest, therefore we must use Java Http requests
 // see for reference: https://gist.github.com/billybong/a462152889b6616deb02
 
 var cordra = require("cordra");
-var cordraBaseUri =  cordra.get('design').content.handleMintingConfig.baseUri;
-// set the URI to the plant detection uri, in this example running on the same host as Cordra
-var imageServiceUri = 'http://127.0.0.1:8000';
+var cordraBaseUri = cordra.get('design').content.handleMintingConfig.baseUri;
+// ensure that ends with a slash
+if (cordraBaseUri[cordraBaseUri.length - 1] !== '/'){
+    cordraBaseUri += '/'
+}
+var imageServiceUri = 'http://localhost:8000/object-detection';
 
-/* TODO: also needed to provide the correct context with the Cordra object when annotations exist, e.g.:
-"@context": [
-    "http://iiif.io/api/presentation/3/context.json",
-    {"ods": "http://github.com/hardistyar/openDS/ods-ontology/terms/"},
-    {"dwc": "http://rs.tdwg.org/dwc/terms/"},
-]
-*/
+exports.afterCreateOrUpdate = afterCreateOrUpdate;
+
 exports.methods = {};
-exports.methods.createAnnotations = createAnnotations;
 
-function createAnnotations(object, context){
-    if (!context.params || typeof(context.params) !== 'object' || !('payload' in context.params)){
-        throw new cordra.CordraError({'message': 'Missing parameter 'payload''}, 400);
-    }
-    var con = new java.net.URL(imageServiceUri + '/classify_url').openConnection();
-    con.setConnectTimeout(30000); // 30 seconds
-    con.setReadTimeout(30000); // 30 seconds
-    var payloadUrl = cordraBaseUri + '/objects/' + object.id + '?payload=' + context.params.payload;
-    var data = JSON.stringify({'url': payloadUrl});
-    var response = {};
-    console.log('Sending request to micro service');
-    try {
-        write(con, data);
-        response = JSON.parse(read(con.inputStream));
-    } catch (e){
-        throw 'An error occured during processing ' + e;
-    }
-    if(con.responseCode === 200 && response.success && Array.isArray(response.instances)){
+exports.methods.getAnnotations = getAnnotations;
+exports.methods.getAnnotations.allowGet = true;
 
-        var graph = object.content['@graph'];
-        var existingAnnotationPages = graph.filter(function(i){
-            return i['@type'] === 'AnnotationPage'
-            || i['type'] === 'AnnotationPage';
-        });
-        var counter = 0;
-        if (existingAnnotationPages.length > 0) {
-            counter = existingAnnotationPages[0].items.length; // there should be only one
-        }
-        var items = [];
-        for (var i=0; i<response.instances.length; i++){
-            // boundingBox is returned as [xmin, ymin, xmax, ymax]
-            var bb = response.instances[i].boundingBox;
-            var x = bb[0]; // xmin
-            var y = bb[1]; // ymin
-            var w = bb[2] - x;
-            var h = bb[3] - y;
-            var item = {
-                '@id': cordraBaseUri + '/objects/' + object.id + '/annotations/' + counter,
-                '@type': 'Annotation',
-                'oa:hasSelector': {
-                    'type': 'FragmentSelector',
-                    'value': 'xywh='+[x,y,w,h].join(',')
-                },
-                'dwc:measurementType': 'automated plant organ classification',
-                'dwc:measurementValue': response.instances[i].class,
-                'dwc:measurementAccuracy': response.instances[i].score
+function getAnnotations(object, context){
+    if (Array.isArray(object.payloads) && object.payloads.length > 0){
+        var query = 'type:AnnotationList AND /ods\\:linkedDigitalObject:' + object.id + ' AND (';
+        for(var i=0; i<object.payloads.length; i++){
+            var payloadName = object.payloads[i].name;
+            var payloadUrl = cordraBaseUri + 'objects/' + object.id + '?payload=' + payloadName;
+            var payloadUrlEscaped = payloadUrl.replace(/([\!\*\+\&\|\(\)\[\]\{\}\^\~\?\:\"])/g, "\\$1");
+            if(i>0){
+                query += ' OR ';
             }
-            items.push(item);
-            counter += 1;
+            query += '/ods\\:imageURI:"' + payloadUrlEscaped + '"';
         }
+        query += ')';
+        var queryResult = cordra.search(query);
+        return queryResult.results;
+    }
+    return [];
+}
 
-        if (existingAnnotationPages.length > 0){
-            existingAnnotationPages[0].items.push(items);
-        } else {
-            object.content['@graph'].push({
-                '@id': cordraBaseUri + '/objects/' + object.id + '/annotations/',
-                '@type': 'AnnotationPage',
-                'items': items
-            });
+function afterCreateOrUpdate(object, context) {
+    // todo: need validation of uploaded payload type and appropriate handling
+    if (Array.isArray(object.payloads) && object.payloads.length > 0){
+        for(var i=0; i<object.payloads.length; i++){
+            var payloadName = object.payloads[i].name;
+            var payloadUrl = cordraBaseUri + 'objects/' + object.id + '?payload=' + payloadName;
+            var payloadUrlEscaped = payloadUrl.replace(/([\!\*\+\&\|\(\)\[\]\{\}\^\~\?\:\"])/g, "\\$1");
+            var query = 'type:AnnotationList AND /ods\\:linkedDigitalObject:' + object.id;
+            query += ' AND /ods\\:imageURI:"' + payloadUrlEscaped + '"';
+            // search if AnnotationLists for the image exist already in Cordra
+            var queryResult = cordra.search(query);
+            // if not send to the microservice for object detection
+            if (queryResult.results.length === 0){
+                var data = JSON.stringify({
+                    "linkedDigitalObjectId": object.id,
+                    "url": payloadUrl,
+                    "returnType": "cordra",
+                    "runAsync": true
+                });
+                var con = new java.net.URL(imageServiceUri).openConnection();
+                con.setConnectTimeout(10000); // 10 seconds
+                con.setReadTimeout(10000); // 10 seconds
+                var response = {};
+                try {
+                    write(con, data);
+                    response = JSON.parse(read(con.inputStream));
+                } catch (e){
+                    console.log("HTTP Error: ", e);
+                }
+            }
         }
-        return {
-          'success': true,
-          'message': 'Detected and created ' + items.length + ' new annotations'
-        };
-    } else {
-       throw new cordra.CordraError({'message': response.detail || 'An error occurred during image classification'}, 409);
     }
 }
 
@@ -149,6 +149,7 @@ function read(inputStream){
     var inReader = new java.io.BufferedReader(new java.io.InputStreamReader(inputStream));
     var inputLine;
     var response = new java.lang.StringBuffer();
+
     while ((inputLine = inReader.readLine()) !== null) {
            response.append(inputLine);
     }
@@ -157,8 +158,8 @@ function read(inputStream){
 }
 
 function write(con, data){
-    con.requestMethod = 'POST';
-    con.setRequestProperty( 'Content-Type', 'application/json; charset=utf-8');
+    con.requestMethod = "POST";
+    con.setRequestProperty( "Content-Type", "application/json; charset=utf-8");
     con.doOutput=true;
     var wr = new java.io.DataOutputStream(con.outputStream);
     wr.writeBytes(data);
@@ -167,8 +168,5 @@ function write(con, data){
 }
 ```
 
-
-## Discussion
-This example above stores the detected plant organ instances and their bounding boxes as `http://www.w3.org/ns/oa:annotation`(respective the collection of them as one `AnnotationPage`), according to the [IIIF Presentation API 3.0](https://iiif.io/api/presentation/3.0/#55-annotation-page). It still needs to be evaluated whether this is the correct vocabulary.
-
-Also it needs to be discusses whether Cordra should be responsible for the RDF serialization (as above) or whether the plant detection microservice should return the results directly in RDF.
+## Outlook
+The generated *AnnotationList* currently does not make use of a controlled RDF vocabulary, this should be changed in the future and when decided uploaded in json-ld format.

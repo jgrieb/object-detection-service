@@ -1,7 +1,8 @@
 typing
-fastapi
+fastapi==0.68.0
 uvicorn[standard]
 python-multipart
+python-jose[encryptography]
 opencv-python
 --find-links https://download.pytorch.org/whl/torch_stable.html
 torch==1.9.0+cpu
