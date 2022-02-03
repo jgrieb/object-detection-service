@@ -43,7 +43,6 @@ You can then either access it by passing a url to an image:
 
 Or by uploading the image directly:
 `curl -XPOST localhost:8000/object-detection/image-upload -F 'payload=@images/BR0000013701604.jpg'`
-curl -XPOST localhost:8000/object-detection/image-upload -F 'payload=@CamTrapImport_2017-04-12_AdditionalStations_Orquidia_031_03.JPG'
 
 #### Return type
 By default JSON is returned, but you can change this so that the service returns the image with the detected bounding boxes drawn on top (in this case you should specify the output file with the `-o` flag)

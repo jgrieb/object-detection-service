@@ -4,5 +4,6 @@
     "username": "USERNAME",
     "password": "PASSWORD"
   },
-  "verifyTls": true
+  "verifyTls": true,
+  "objectThingClasses": ["leaf", "flower", "fruit", "seed", "stem", "root"]
 }

@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import requests
 from jose import jwk, jwt, exceptions
 import json
-
+from datetime import datetime
 from fastapi import FastAPI, File, UploadFile, Request, HTTPException, Form, Response, Header, BackgroundTasks
 from typing import Optional
 from starlette.responses import StreamingResponse
@@ -29,9 +29,6 @@ from detectron2.utils.visualizer import ColorMode, Visualizer
 from detectron2.data.detection_utils import convert_PIL_to_numpy
 from detectron2 import model_zoo
 from enum import Enum
-
-# According to model training: https://github.com/2younis/plant-organ-detection/blob/master/train_net.py
-CLASS_LIST = ['leaf', 'flower', 'fruit', 'seed', 'stem', 'root']
 
 class ReturnType(str, Enum):
     json = 'json'
@@ -83,18 +80,24 @@ def doc(docstring):
     return document
 
 app = FastAPI()
-cfg = get_cfg()
-cfg.merge_from_file(model_zoo.get_config_file('PascalVOC-Detection/faster_rcnn_R_50_FPN.yaml'))
-cfg.merge_from_file('config/custom_model_config.yaml')
 
-cfg.freeze()
-MetadataCatalog.get('object_detection_service').set(thing_classes=CLASS_LIST)
-predictor = DefaultPredictor(cfg)
 with open('config/cordraConfig.json') as file:
     txt = file.read()
 cordra_config = json.loads(txt)
 cordra_credentials = cordra_config['credentials']
 cordra_client = CordraClient(cordra_config['url'],cordra_config['verifyTls'])
+THING_CLASSES = cordra_config['objectThingClasses']
+# Per template these are according to model training (pay attention to the order!):
+# https://github.com/2younis/plant-organ-detection/blob/master/train_net.py
+# e.g. THING_CLASSES = ['leaf', 'flower', 'fruit', 'seed', 'stem', 'root']
+
+cfg = get_cfg()
+cfg.merge_from_file(model_zoo.get_config_file('PascalVOC-Detection/faster_rcnn_R_50_FPN.yaml'))
+cfg.merge_from_file('config/custom_model_config.yaml')
+
+cfg.freeze()
+MetadataCatalog.get('object_detection_service').set(thing_classes=THING_CLASSES)
+predictor = DefaultPredictor(cfg)
 
 """
 with open('config/keycloakConfig.json') as file:
@@ -120,7 +123,7 @@ def authenticate(token):
 def read_root():
     return {'help': ('Submit your image as multipart/form-data with POST '
                     'operation to the /object-detection/image-upload endpoint '
-                    'or submit a url (body as JSON) to the /classify_url endpoint')}
+                    'or submit a url (body as JSON) to the /object-detection endpoint')}
 
 @app.post('/object-detection', summary="Run object detection on a provided image url")
 @doc("""
@@ -206,11 +209,14 @@ def process_image(img, returnType, linkedDigitalObjectId = '', imageURI = ''):
     predictions = predictor(img)
     instances = predictions['instances']
     instances_result = []
-    class_names = CLASS_LIST
+    class_names = THING_CLASSES
     boxes = instances.pred_boxes.tensor.numpy()
     classes = instances.pred_classes
     scores = instances.scores.numpy()
     num_instances = len(boxes)
+    # The following logging formatting is not unified with uvicorns logging output
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(current_time + ' Detected %d instances' % num_instances)
     for i in range(num_instances):
         instances_result.append({
             'class': class_names[classes[i]],
