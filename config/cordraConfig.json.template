@@ -5,5 +5,6 @@
     "password": "PASSWORD"
   },
   "verifyTls": true,
+  "cordraTypeName": "AnnotationList",
   "objectThingClasses": ["leaf", "flower", "fruit", "seed", "stem", "root"]
 }

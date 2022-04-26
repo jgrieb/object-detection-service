@@ -1,7 +1,7 @@
 """
 Note: Authorization should be handled via signed JWT tokens in the future. After
 the validation of the token and authorization check, the same token can be used
-to create the instances in Cordra. Until then, a usernam and password of an
+to create the instances in Cordra. Until then, a username and password of an
 Cordra account must be specified.
 """
 # TODO: refactor this file into logically nicely separated Python files
@@ -37,16 +37,9 @@ class ReturnType(str, Enum):
 
 class Body(BaseModel):
     url: str
-    linkedDigitalObjectId: Optional[str] = ''
+    cordraNewObjectData: Optional[dict] = {}
     returnType: Optional[ReturnType] = ReturnType.json
     runAsync: Optional[bool] = False
-
-    @validator('returnType')
-    def must_have_specimen_id_and_async(cls, v, values):
-        if v == 'cordra':
-            if 'linkedDigitalObjectId' not in values or not values['linkedDigitalObjectId']:
-                raise ValueError('A linkedDigitalObjectId must be provided with returnType cordra')
-        return v
 
     @validator('runAsync')
     def must_only_be_used_with_cordra(cls, v, values):
@@ -56,14 +49,17 @@ class Body(BaseModel):
         return v
 
 class CordraClient:
-    def __init__(self, base_url, verify_tls = True):
+    def __init__(self, base_url, cordra_type_name, verify_tls = True):
         if not base_url.endswith('/'):
             base_url += '/'
         self.base_url = base_url
+        self.cordra_type_name = cordra_type_name
         self.verify_tls = verify_tls
 
+
     def upload(self, data_dict, auth=None):
-        request_url = self.base_url + 'objects?type=AnnotationList'
+        request_url = self.base_url + 'objects?type=' + self.cordra_type_name
+        request_url += '&full=true' # so that the ID of the new DO is returned
         if auth is not None:
             auth = requests.auth.HTTPBasicAuth(auth['username'], auth['password'])
         return requests.post(
@@ -72,6 +68,21 @@ class CordraClient:
                     auth=auth,
                     data=json.dumps(data_dict),
                     verify=self.verify_tls)
+
+    def update_annotation_reference(self, referenceObjectId, annotationListId, auth=None):
+        request_url = self.base_url + 'call?method=addAnnotationReference&objectId='
+        request_url += referenceObjectId
+        data_dict = {'annoationListId': annotationListId}
+        if auth is not None:
+            auth = requests.auth.HTTPBasicAuth(auth['username'], auth['password'])
+        return requests.post(
+                    request_url,
+                    headers={'Content-Type': 'application/json'},
+                    auth=auth,
+                    data=json.dumps(data_dict),
+                    verify=self.verify_tls)
+
+
 
 def doc(docstring):
     def document(func):
@@ -85,7 +96,7 @@ with open('config/cordraConfig.json') as file:
     txt = file.read()
 cordra_config = json.loads(txt)
 cordra_credentials = cordra_config['credentials']
-cordra_client = CordraClient(cordra_config['url'],cordra_config['verifyTls'])
+cordra_client = CordraClient(cordra_config['url'], cordra_config['cordraTypeName'], cordra_config['verifyTls'])
 THING_CLASSES = cordra_config['objectThingClasses']
 # Per template these are according to model training (pay attention to the order!):
 # https://github.com/2younis/plant-organ-detection/blob/master/train_net.py
@@ -110,8 +121,9 @@ def authenticate(token):
     auth_success = False
     if isinstance(token, str) and token.startswith('Bearer '):
         try:
+            token = token.replace("Bearer ", "").strip()
             decoded_token = jwt.decode(token, public_key, algorithms=[authConfig['jwk']['alg']], audience=authConfig['aud'][0])
-        except exceptions.ExpiredSignatureError:
+        except (exceptions.ExpiredSignatureError, exceptions.JWTError):
             raise HTTPException(status_code=401, detail='Authentication failed')
         if 'iss' in decoded_token and decoded_token['iss'] == authConfig['iss']:
             auth_success = True
@@ -132,19 +144,19 @@ def read_root():
     following parameters:
     - **url**: (required) url to the image to process
     - **returnType**: (optional) json/image/cordra, default: json
-    - **linkedDigitalObjectId**: (optional) the linkedDigitalObjectId that the generated
-    annotations will be linked to, default: ''
+    - **cordraNewObjectData**: (optional) additional attributes for the new
+    object which will be created when returnType=cordra, default: {}
     - **runAsync**: (optional) if true, will run the object detection
     asynchronously, default: false
 
-    Note that when the returnType is cordra then a linkedDigitalObjectId must be
-    provided and it is recommended to run with **runAsync** = true. The detected
+    Note that when the returnType is cordra then
+    it is recommended to run with **runAsync** = true. The detected
     objects will be uploaded as AnnotationList objects to the Cordra instance %s
     """ % cordra_config['url'])
 async def object_detection(
                 body: Body,
                 background_tasks: BackgroundTasks,
-                authorization: Optional[str] = Header(None),):
+                authorization: Optional[str] = Header(None)):
     #authenticate(authorization)
     valid_url = urlparse(body.url)
     if not all([valid_url.scheme in ['file', 'http', 'https'], valid_url.netloc, valid_url.path]):
@@ -158,7 +170,7 @@ async def object_detection(
     process_function = lambda: process_image(
                                 response.content,
                                 body.returnType,
-                                linkedDigitalObjectId=body.linkedDigitalObjectId,
+                                cordraNewObjectData=body.cordraNewObjectData,
                                 imageURI=body.url)
     if body.runAsync:
         background_tasks.add_task(process_function)
@@ -175,14 +187,14 @@ async def object_detection(
     Upload an image object as multipart formdata in order to run the object
     detection on it.
 
-    Note that when the returnType is cordra then a linkedDigitalObjectId must be
+    Note that when the returnType is cordra then a cordraNewObjectData must be
     provided and it is recommended to run with **runAsync** = true. The detected
     objects will be uploaded as AnnotationList objects to the Cordra instance %s
     """ % cordra_config['url'])
 async def object_detection_image_upload(
                 payload: UploadFile = File(...),
                 returnType: ReturnType = Form(ReturnType.json),
-                linkedDigitalObjectId: Optional[str] = '',
+                cordraNewObjectData: Optional[dict] = {},
                 imageURI: Optional[str] = '',
                 runAsync: Optional[bool] = False,
                 authorization: Optional[str] = Header(None)):
@@ -192,7 +204,7 @@ async def object_detection_image_upload(
                                 process_image,
                                 await payload.read(),
                                 returnType,
-                                linkedDigitalObjectId=linkedDigitalObjectId,
+                                cordraNewObjectData=cordraNewObjectData,
                                 imageURI=imageURI)
         return {
             'info': ('Started image detection, generated annotations will be '
@@ -201,10 +213,10 @@ async def object_detection_image_upload(
         return process_image(
                                 await payload.read(),
                                 returnType,
-                                linkedDigitalObjectId=linkedDigitalObjectId,
+                                cordraNewObjectData=cordraNewObjectData,
                                 imageURI=imageURI)
 
-def process_image(img, returnType, linkedDigitalObjectId = '', imageURI = ''):
+def process_image(img, returnType, cordraNewObjectData = {}, imageURI = ''):
     img = convert_PIL_to_numpy(Image.open(io.BytesIO(img)), 'BGR')
     predictions = predictor(img)
     instances = predictions['instances']
@@ -219,9 +231,11 @@ def process_image(img, returnType, linkedDigitalObjectId = '', imageURI = ''):
     print(current_time + ' Detected %d instances' % num_instances)
     for i in range(num_instances):
         instances_result.append({
-            'class': class_names[classes[i]],
+            'body': class_names[classes[i]],
             'score': float(scores[i]),
-            'boundingBox': [int(x) for x in boxes[i]]
+            'bboxSelector': box_to_xywh(boxes[i]),
+            'generatedBy':'machine-detected',
+            'sourceId':'object-detection-service'
         })
     if returnType == 'json':
         result = {'success': True}
@@ -242,25 +256,33 @@ def process_image(img, returnType, linkedDigitalObjectId = '', imageURI = ''):
     elif returnType == 'cordra':
         if not imageURI:
             raise HTTPException(status_code=400, detail='No imageURI provided')
-        if not linkedDigitalObjectId:
-            raise HTTPException(status_code=400, detail='No digital specimen ID provided')
         result_dict = {
                 'detectedInstances': len(instances_result),
                 'annotationListCreated': False
         }
-        data_dict = {
-                    'ods:linkedDigitalObject': linkedDigitalObjectId,
-                    'ods:originatorType': 'machine-detected',
-                    'ods:imageURI': imageURI,
-                    'ods:annotations': instances_result
-        }
+        data_dict = cordraNewObjectData
+        data_dict['ods:annotations'] = instances_result
         try:
             response = cordra_client.upload(data_dict, auth=cordra_credentials)
+            if response.status_code in [200, 201]:
+                result_dict['annotationListCreated'] = True
+                result_dict['cordraResult'] = response.json()
+
+                if 'ods:forMediaObject' in cordraNewObjectData:
+                    cordra_client.update_annotation_reference(
+                        cordraNewObjectData['ods:forMediaObject'],
+                        response.json()['id'],
+                        auth=cordra_credentials
+                    )
+
         except requests.exceptions.ConnectionError:
             raise HTTPException(status_code=500, detail='Could not connect to Cordra server')
-        if response.status_code in [200, 201]:
-            result_dict['annotationListCreated'] = True
-            result_dict['annotationList'] = cordra_config['url'] + '/objects/' + response.json()['id']
-        else:
-            result_dict['detail'] = response.json()
         return result_dict
+
+def box_to_xywh(box):
+    res = 'xywh='
+    x = box[0]; # xmin
+    y = box[1]; # ymin
+    w = box[2] - x;
+    h = box[3] - y;
+    return res + ",".join([str(int(i)) for i in [x,y,w,h]])
