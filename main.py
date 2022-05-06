@@ -69,10 +69,10 @@ class CordraClient:
                     data=json.dumps(data_dict),
                     verify=self.verify_tls)
 
-    def update_annotation_reference(self, referenceObjectId, annotationListId, auth=None):
+    def update_annotation_reference(self, referenceObjectId, annotationId, auth=None):
         request_url = self.base_url + 'call?method=addAnnotationReference&objectId='
         request_url += referenceObjectId
-        data_dict = {'annoationListId': annotationListId}
+        data_dict = {'annotationId': annotationId}
         if auth is not None:
             auth = requests.auth.HTTPBasicAuth(auth['username'], auth['password'])
         return requests.post(
@@ -162,7 +162,10 @@ async def object_detection(
     if not all([valid_url.scheme in ['file', 'http', 'https'], valid_url.netloc, valid_url.path]):
         raise HTTPException(status_code=400, detail='The provided value is not a valid URL')
     try:
-        response = requests.get(body.url, timeout=10, verify=cordra_config['verifyTls'])
+        auth = None
+        if body.url.startswith(cordra_config['url']):
+            auth = requests.auth.HTTPBasicAuth(cordra_config['credentials']['username'], cordra_config['credentials']['password'])
+        response = requests.get(body.url, timeout=10, verify=cordra_config['verifyTls'], auth=auth)
     except:
         raise HTTPException(status_code=400, detail='An error ocurred during fetching the image from the provided url')
     if response.status_code != 200:
@@ -233,6 +236,7 @@ def process_image(img, returnType, cordraNewObjectData = {}, imageURI = ''):
         instances_result.append({
             'body': class_names[classes[i]],
             'score': float(scores[i]),
+            'annotationType': 'LabelledBoundingBox',
             'bboxSelector': box_to_xywh(boxes[i]),
             'generatedBy':'machine-detected',
             'sourceId':'object-detection-service'
@@ -258,23 +262,23 @@ def process_image(img, returnType, cordraNewObjectData = {}, imageURI = ''):
             raise HTTPException(status_code=400, detail='No imageURI provided')
         result_dict = {
                 'detectedInstances': len(instances_result),
-                'annotationListCreated': False
+                'annotationsCreated': False
         }
-        data_dict = cordraNewObjectData
-        data_dict['ods:annotations'] = instances_result
+
         try:
-            response = cordra_client.upload(data_dict, auth=cordra_credentials)
-            if response.status_code in [200, 201]:
-                result_dict['annotationListCreated'] = True
-                result_dict['cordraResult'] = response.json()
-
-                if 'ods:forMediaObject' in cordraNewObjectData:
-                    cordra_client.update_annotation_reference(
-                        cordraNewObjectData['ods:forMediaObject'],
-                        response.json()['id'],
-                        auth=cordra_credentials
-                    )
-
+            created_annotation_ids = []
+            for instance in instances_result:
+                instance.update(cordraNewObjectData)
+                response = cordra_client.upload(instance, auth=cordra_credentials)
+                if response.status_code in [200, 201]:
+                    created_annotation_ids.append(response.json()['id'])
+                result_dict['annotationsCreated'] = True
+            if len(created_annotation_ids) > 0 and 'ods:forMediaObject' in cordraNewObjectData:
+                resp = cordra_client.update_annotation_reference(
+                    cordraNewObjectData['ods:forMediaObject'],
+                    created_annotation_ids,
+                    auth=cordra_credentials
+                )
         except requests.exceptions.ConnectionError:
             raise HTTPException(status_code=500, detail='Could not connect to Cordra server')
         return result_dict
