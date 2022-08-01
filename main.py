@@ -38,8 +38,17 @@ class ReturnType(str, Enum):
 class Body(BaseModel):
     url: str
     cordraNewObjectData: Optional[dict] = {}
+    imageObjectId: Optional[str]
     returnType: Optional[ReturnType] = ReturnType.json
     runAsync: Optional[bool] = False
+
+    @validator('imageObjectId')
+    def required_when_returntype_cordra(cls, v, values):
+        if v:
+            if 'returnType' in values and values['returnType'] == 'cordra':
+                if 'imageObjectId' not in values or len(values['imageObjectId']) == 0:
+                    raise ValueError('imageObjectId must be given with return type cordra')
+        return v
 
     @validator('runAsync')
     def must_only_be_used_with_cordra(cls, v, values):
@@ -174,7 +183,8 @@ async def object_detection(
                                 response.content,
                                 body.returnType,
                                 cordraNewObjectData=body.cordraNewObjectData,
-                                imageURI=body.url)
+                                imageURI=body.url,
+                                imageObjectId=body.imageObjectId)
     if body.runAsync:
         background_tasks.add_task(process_function)
         return {
@@ -219,7 +229,7 @@ async def object_detection_image_upload(
                                 cordraNewObjectData=cordraNewObjectData,
                                 imageURI=imageURI)
 
-def process_image(img, returnType, cordraNewObjectData = {}, imageURI = ''):
+def process_image(img, returnType, cordraNewObjectData = {}, imageURI = '', imageObjectId=''):
     img = convert_PIL_to_numpy(Image.open(io.BytesIO(img)), 'BGR')
     predictions = predictor(img)
     instances = predictions['instances']
@@ -234,12 +244,18 @@ def process_image(img, returnType, cordraNewObjectData = {}, imageURI = ''):
     print(current_time + ' Detected %d instances' % num_instances)
     for i in range(num_instances):
         instances_result.append({
-            'body': class_names[classes[i]],
-            'score': float(scores[i]),
-            'annotationType': 'LabelledBoundingBox',
-            'bboxSelector': box_to_xywh(boxes[i]),
-            'generatedBy':'machine-detected',
-            'sourceId':'object-detection-service'
+            '@type': 'oa:Annotation',
+            'oa:hasTarget': {
+                'oa:hasSelector': {
+                    '@type': 'oa:FragmentSelector',
+                    '@value': box_to_xywh(boxes[i])
+                }
+            },
+            'oa:hasBody': {
+              '@type': 'ods:TaxonomicBody',
+              'dwc:acceptedNameUsageID': class_names[classes[i]],
+              'score': float(scores[i])
+            },
         })
     if returnType == 'json':
         result = {'success': True}
@@ -269,16 +285,11 @@ def process_image(img, returnType, cordraNewObjectData = {}, imageURI = ''):
             created_annotation_ids = []
             for instance in instances_result:
                 instance.update(cordraNewObjectData)
+                instance['oa:hasTarget']['source'] = imageObjectId
                 response = cordra_client.upload(instance, auth=cordra_credentials)
                 if response.status_code in [200, 201]:
                     created_annotation_ids.append(response.json()['id'])
                 result_dict['annotationsCreated'] = True
-            if len(created_annotation_ids) > 0 and 'ods:forMediaObject' in cordraNewObjectData:
-                resp = cordra_client.update_annotation_reference(
-                    cordraNewObjectData['ods:forMediaObject'],
-                    created_annotation_ids,
-                    auth=cordra_credentials
-                )
         except requests.exceptions.ConnectionError:
             raise HTTPException(status_code=500, detail='Could not connect to Cordra server')
         return result_dict
