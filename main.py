@@ -117,6 +117,7 @@ cfg.merge_from_file('config/custom_model_config.yaml')
 
 cfg.freeze()
 MetadataCatalog.get('object_detection_service').set(thing_classes=THING_CLASSES)
+MetadataCatalog.get('object_detection_service').set(thing_colors=[(0, 255, 0),(51, 204, 204),(255, 0, 0),(26, 26, 26),(204, 0, 153),(204, 204, 0)])
 predictor = DefaultPredictor(cfg)
 
 """

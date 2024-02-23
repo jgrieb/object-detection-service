@@ -9,3 +9,4 @@ torch==1.9.0+cpu
 torchvision==0.10.0+cpu
 --find-links https://dl.fbaipublicfiles.com/detectron2/wheels/cpu/torch1.9/index.html
 detectron2
+pillow==9.1.0
