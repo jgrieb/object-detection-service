@@ -11,7 +11,7 @@ The idea is that an image can be sent to the microservice via http, which then a
 
 
 ## Setup
-Requirement: Python3 with the venv module installed
+Requirement: Python3.8 (!),(higher Python versions would require a change of the current dependency config) with the venv module installed
 ```bash
 # copy this repository
 git clone https://github.com/jgrieb/object-detection-service
